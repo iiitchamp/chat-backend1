@@ -38,7 +38,7 @@ app.use(express.static("public"));
 
 // Active users and WebRTC signaling
 let activeUsers = [];
-const peerConnections = {};
+let peerConnections = {};
 
 // Socket.io setup
 io.on('connection', (socket) => {
@@ -48,6 +48,9 @@ io.on('connection', (socket) => {
   socket.on('setUsername', (username) => {
     socket.username = username;
     activeUsers.push({ username, socketId: socket.id });
+
+    // Broadcast user joined message in group chat
+    io.emit('receiveMessage', { message: `${username} has joined the chat.`, isPrivate: false });
 
     // Emit the updated active users list to all clients
     io.emit('updateActiveUsers', activeUsers.map((user) => user.username));
@@ -87,6 +90,11 @@ io.on('connection', (socket) => {
     console.log('user disconnected:', socket.id);
     activeUsers = activeUsers.filter((user) => user.socketId !== socket.id);
     io.emit('updateActiveUsers', activeUsers.map((user) => user.username));
+
+    // Broadcast user left message in group chat
+    if (socket.username) {
+      io.emit('receiveMessage', { message: `${socket.username} has left the chat.`, isPrivate: false });
+    }
   });
 });
 

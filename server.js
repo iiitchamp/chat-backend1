@@ -66,11 +66,10 @@ io.on('connection', (socket) => {
     .then(() => console.log(`User ${username} saved to database`))
     .catch(err => console.log(`Error saving user: ${err}`));
 
-  // Add to active users
   activeUsers.push({ username, socketId: socket.id });
 
   // Broadcast "User joined" message to all
-  io.emit('receiveMessage', { message: `${username} has joined the chat.`, isPrivate: false });
+  io.emit('receiveMessage', { message: `${username} has joined the chat.`, from: 'system', isPrivate: false });
   io.emit('updateActiveUsers', activeUsers.map((user) => user.username));
 
   // Handle sending messages
@@ -88,10 +87,10 @@ io.on('connection', (socket) => {
 
     if (isPrivate) {
       // Send private message to the target user
-      io.to(targetId).emit('receiveMessage', data);
+      io.to(targetId).emit('receiveMessage', { message, from: socket.username, isPrivate: true });
     } else {
       // Send group message to everyone
-      io.emit('receiveMessage', data);
+      io.emit('receiveMessage', { message, from: socket.username, isPrivate: false });
     }
   });
 
@@ -125,7 +124,7 @@ io.on('connection', (socket) => {
 
     // Broadcast "User left" message
     if (socket.username) {
-      io.emit('receiveMessage', { message: `${socket.username} has left the chat.`, isPrivate: false });
+      io.emit('receiveMessage', { message: `${socket.username} has left the chat.`, from: 'system', isPrivate: false });
     }
   });
 });

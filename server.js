@@ -1,139 +1,148 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
-const mongoose = require('mongoose');
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const mongoose = require("mongoose");
+const bcrypt = require("bcrypt");
+const cors = require("cors");
+
+// MongoDB connection
+mongoose
+  .connect("mongodb+srv://kraj:Champion1685@cluster0.o7g0j.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0", {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => console.log("MongoDB connected"))
+  .catch((err) => console.error("MongoDB connection error:", err));
+
+// User Schema
+const userSchema = new mongoose.Schema({
+  username: { type: String, unique: true, required: true },
+  password: { type: String, required: true },
+});
+
+const User = mongoose.model("User", userSchema);
 
 // Express setup
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // allow all origins (this should be restricted in production)
+    origin: "*",
     methods: ["GET", "POST"],
   },
 });
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public")); // Serve static files if needed (adjust as per your needs)
+app.use(express.static("public"));
 
-// MongoDB connection setup
-mongoose.connect("mongodb+srv://kraj:Champion1685@cluster0.o7g0j.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0", {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-})
-  .then(() => console.log('MongoDB connected'))
-  .catch(err => console.log('Error connecting to MongoDB:', err));
+// Active users and chat history
+const activeUsers = new Map();
+const privateChats = new Map(); // Store private chat history
 
-// Mongoose Models
-const userSchema = new mongoose.Schema({
-  username: { type: String, required: true },
-  socketId: { type: String, required: true },
-});
-const User = mongoose.model('User', userSchema);
+// WebRTC signaling for video calls
+const groupCallParticipants = new Set();
 
-// Message Schema
-const messageSchema = new mongoose.Schema({
-  from: { type: String, required: true },
-  to: { type: String, required: true }, // 'group' or specific username
-  message: { type: String, required: true },
-  timestamp: { type: Date, default: Date.now },
-});
-const Message = mongoose.model('Message', messageSchema);
+// Socket.IO setup
+io.on("connection", (socket) => {
+  console.log("A user connected:", socket.id);
 
-// Active users array
-let activeUsers = [];
-let peerConnections = {};
+  // Set anonymous user initially
+  activeUsers.set(socket.id, `Guest-${socket.id.slice(0, 5)}`);
+  io.emit("userList", Array.from(activeUsers.values()));
 
-// Socket.io setup
-io.on('connection', (socket) => {
-  console.log('a user connected:', socket.id);
+  // Group chat message handling
+  socket.on("chatMessage", (data) => {
+    const sender = activeUsers.get(socket.id) || "Anonymous";
+    io.emit("chatMessage", { sender, message: data.message });
+  });
 
-  // Assign a unique anonymous username to the user
-  const username = `User${Math.floor(Math.random() * 10000)}`;
-  socket.username = username;
+  // Private messaging
+  socket.on("privateMessage", (data) => {
+    const { targetUsername, message } = data;
+    const sender = activeUsers.get(socket.id);
+    const targetSocketId = [...activeUsers.entries()].find(
+      ([, username]) => username === targetUsername
+    )?.[0];
 
-  // Create a new user in the database or update if exists
-  const newUser = new User({ username, socketId: socket.id });
-  newUser.save()
-    .then(() => console.log(`User ${username} saved to database`))
-    .catch(err => console.log(`Error saving user: ${err}`));
+    if (targetSocketId) {
+      io.to(targetSocketId).emit("privateMessage", { sender, message });
+      socket.emit("privateMessage", { sender, message });
 
-  activeUsers.push({ username, socketId: socket.id });
-
-  // Broadcast "User joined" message to all
-  io.emit('receiveMessage', { message: `${username} has joined the chat.`, isPrivate: false });
-  io.emit('updateActiveUsers', activeUsers.map((user) => user.username));
-
-  // Handle sending messages
-  socket.on('sendMessage', async (data) => {
-    const { message, isPrivate, targetId } = data;
-
-    // Save message to the database
-    const newMessage = new Message({
-      from: socket.username,
-      to: isPrivate ? targetId : 'group',
-      message: message,
-    });
-
-    await newMessage.save();
-
-    if (isPrivate) {
-      // Send private message to the target user
-      io.to(targetId).emit('receiveMessage', data);
+      // Save the private chat history
+      if (!privateChats.has(targetSocketId)) {
+        privateChats.set(targetSocketId, []);
+      }
+      privateChats.get(targetSocketId).push({ sender, message });
     } else {
-      // Send group message to everyone
-      io.emit('receiveMessage', data);
+      socket.emit("errorMessage", { error: "User not found" });
     }
+  });
+
+  // Set username after registration
+  socket.on("setUsername", (username) => {
+    activeUsers.set(socket.id, username);
+    io.emit("userList", Array.from(activeUsers.values()));
   });
 
   // WebRTC signaling for video calls
-  socket.on('callUser', ({ targetUsername, offer }) => {
-    const targetSocketId = activeUsers.find(
-      (user) => user.username === targetUsername
-    )?.socketId;
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('receiveOffer', { offer, from: socket.id });
-    }
+  socket.on("callUser", ({ targetSocketId, offer }) => {
+    io.to(targetSocketId).emit("callUser", { from: socket.id, offer });
   });
 
-  socket.on('answerOffer', ({ answer, to }) => {
-    io.to(to).emit('receiveAnswer', { answer, from: socket.id });
+  socket.on("answerCall", ({ to, answer }) => {
+    io.to(to).emit("callAnswered", { from: socket.id, answer });
   });
 
-  socket.on('sendIceCandidate', ({ candidate, to }) => {
-    io.to(to).emit('receiveIceCandidate', { candidate, from: socket.id });
+  socket.on("iceCandidate", ({ to, candidate }) => {
+    io.to(to).emit("iceCandidate", { from: socket.id, candidate });
   });
 
-  // Handle user disconnection
-  socket.on('disconnect', async () => {
-    console.log('user disconnected:', socket.id);
-
-    // Remove user from the activeUsers array and database
-    activeUsers = activeUsers.filter((user) => user.socketId !== socket.id);
-    await User.deleteOne({ socketId: socket.id });
-
-    io.emit('updateActiveUsers', activeUsers.map((user) => user.username));
-
-    // Broadcast "User left" message
-    if (socket.username) {
-      io.emit('receiveMessage', { message: `${socket.username} has left the chat.`, isPrivate: false });
-    }
-
-    // Clean up peer connections on disconnect
-    if (peerConnections[socket.id]) {
-      delete peerConnections[socket.id];
-    }
+  // Handle user disconnect
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
+    activeUsers.delete(socket.id);
+    groupCallParticipants.delete(socket.id);
+    io.emit("userList", Array.from(activeUsers.values()));
+    io.emit("groupCallParticipants", Array.from(groupCallParticipants));
   });
 });
 
+// User Authentication Routes
+app.post("/register", async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password)
+    return res.status(400).send("Username and password are required");
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  try {
+    const newUser = new User({ username, password: hashedPassword });
+    await newUser.save();
+    res.status(201).send("User registered successfully");
+  } catch (err) {
+    res.status(400).send("Username already exists");
+  }
+});
+
+app.post("/login", async (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password)
+    return res.status(400).send("Username and password are required");
+
+  const user = await User.findOne({ username });
+  if (!user) return res.status(404).send("User not found");
+
+  const isPasswordValid = await bcrypt.compare(password, user.password);
+  if (!isPasswordValid) return res.status(401).send("Invalid password");
+
+  res.status(200).send("Login successful");
+});
+
 // Default route
-app.get('/', (req, res) => {
-  res.send('Welcome to the Chat and Video Call Server!');
+app.get("/", (req, res) => {
+  res.send("Welcome to the Chat and Video Call Server!");
 });
 
 // Start server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-

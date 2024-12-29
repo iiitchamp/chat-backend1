@@ -8,7 +8,7 @@ const path = require('path');
 // Initialize Express app and HTTP server
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server);
+const io = socketIo("https://chat-backend-1pju.onrender.com");
 
 // MongoDB setup
 mongoose.connect("mongodb+srv://kraj:Champion1685@cluster0.o7g0j.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0", { useNewUrlParser: true, useUnifiedTopology: true })

@@ -36,57 +36,46 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-// Active users and chat history
-const activeUsers = new Map();
-const chatHistory = new Map();
-
-// WebRTC signaling for video calls
-const groupCallParticipants = new Set();
+// WebRTC group call participants and users
+let groupCallParticipants = new Set();
+let activeUsers = new Map();
 
 // Socket.IO setup
 io.on("connection", (socket) => {
-  console.log("A user connected:", socket.id);
+  console.log("User connected:", socket.id);
+  activeUsers.set(socket.id, socket.id);  // Register user by socket id
 
-  // Store the user in the active users map
-  activeUsers.set(socket.id, `Guest-${socket.id.slice(0, 5)}`);
-  io.emit("userList", Array.from(activeUsers.values()));
+  // Notify others when a user connects
+  socket.broadcast.emit("userConnected", socket.id);
+  io.emit("updateActiveUsers", Array.from(activeUsers.values()));
 
-  // Group chat message handling
-  socket.on("chatMessage", (data) => {
-    const sender = activeUsers.get(socket.id) || "Anonymous";
-    io.emit("chatMessage", { sender, message: data.message });
-  });
-
-  // Private messaging
-  socket.on("privateMessage", (data) => {
-    const { targetUsername, message } = data;
-    const sender = activeUsers.get(socket.id);
-    const targetSocketId = [...activeUsers.entries()].find(
-      ([, username]) => username === targetUsername
-    )?.[0];
-
-    if (targetSocketId) {
-      io.to(targetSocketId).emit("privateMessage", { sender, message });
-      socket.emit("privateMessage", { sender, message });
+  // Handle chat messages (group and private)
+  socket.on("sendMessage", (messageData) => {
+    const { message, isPrivate, targetId } = messageData;
+    if (isPrivate) {
+      socket.to(targetId).emit("receiveMessage", { message, sender: socket.id });
     } else {
-      socket.emit("errorMessage", { error: "User not found" });
+      io.emit("receiveMessage", { message, sender: socket.id });
     }
   });
 
-  // WebRTC signaling for video calls
-  socket.on("callUser", ({ targetSocketId, offer }) => {
-    io.to(targetSocketId).emit("callUser", { from: socket.id, offer });
+  // Handle video call signaling (private)
+  socket.on("callUser", (data) => {
+    const { targetSocketId, offer } = data;
+    io.to(targetSocketId).emit("incomingCall", { from: socket.id, offer });
   });
 
-  socket.on("answerCall", ({ to, answer }) => {
+  socket.on("answerCall", (data) => {
+    const { to, answer } = data;
     io.to(to).emit("callAnswered", { from: socket.id, answer });
   });
 
-  socket.on("iceCandidate", ({ to, candidate }) => {
+  socket.on("iceCandidate", (data) => {
+    const { to, candidate } = data;
     io.to(to).emit("iceCandidate", { from: socket.id, candidate });
   });
 
-  // Group call signaling
+  // Group video call signaling
   socket.on("joinGroupCall", () => {
     groupCallParticipants.add(socket.id);
     io.emit("groupCallParticipants", Array.from(groupCallParticipants));
@@ -97,41 +86,20 @@ io.on("connection", (socket) => {
     io.emit("groupCallParticipants", Array.from(groupCallParticipants));
   });
 
-  socket.on("groupCallOffer", ({ offer }) => {
-    groupCallParticipants.forEach((participantId) => {
-      if (participantId !== socket.id) {
-        io.to(participantId).emit("groupCallOffer", { from: socket.id, offer });
-      }
-    });
-  });
-
-  socket.on("groupCallAnswer", ({ to, answer }) => {
-    io.to(to).emit("groupCallAnswer", { from: socket.id, answer });
-  });
-
-  socket.on("groupIceCandidate", ({ candidate }) => {
-    groupCallParticipants.forEach((participantId) => {
-      if (participantId !== socket.id) {
-        io.to(participantId).emit("groupIceCandidate", { from: socket.id, candidate });
-      }
-    });
-  });
-
-  // Handle user disconnect
+  // Disconnect user
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
     activeUsers.delete(socket.id);
     groupCallParticipants.delete(socket.id);
-    io.emit("userList", Array.from(activeUsers.values()));
+    io.emit("updateActiveUsers", Array.from(activeUsers.values()));
     io.emit("groupCallParticipants", Array.from(groupCallParticipants));
   });
 });
 
-// User Authentication Routes
+// User Registration and Authentication
 app.post("/register", async (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password)
-    return res.status(400).send("Username and password are required");
+  if (!username || !password) return res.status(400).send("Username and password are required");
 
   const hashedPassword = await bcrypt.hash(password, 10);
   try {
@@ -145,8 +113,7 @@ app.post("/register", async (req, res) => {
 
 app.post("/login", async (req, res) => {
   const { username, password } = req.body;
-  if (!username || !password)
-    return res.status(400).send("Username and password are required");
+  if (!username || !password) return res.status(400).send("Username and password are required");
 
   const user = await User.findOne({ username });
   if (!user) return res.status(404).send("User not found");
@@ -157,11 +124,4 @@ app.post("/login", async (req, res) => {
   res.status(200).send("Login successful");
 });
 
-// Default route
-app.get("/", (req, res) => {
-  res.send("Welcome to the Chat and Video Call Server!");
-});
-
-// Start server
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(3000, () => console.log("Server running on port 3000"));

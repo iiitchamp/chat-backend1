@@ -7,7 +7,7 @@ const cors = require("cors");
 
 // MongoDB connection
 mongoose
-  .connect("mongodb+srv://kraj:Champion1685@cluster0.o7g0j.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0", {
+  .connect("mongodb+srv://your_connection_string_here", {
     useNewUrlParser: true,
     useUnifiedTopology: true,
   })

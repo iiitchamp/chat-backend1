@@ -39,6 +39,7 @@ app.use(express.static("public"));
 // Active users and chat history
 const activeUsers = new Map();
 const privateChats = new Map(); // Store private chat history
+const groupCalls = new Map(); // Manage group calls
 
 // WebRTC signaling for video calls
 const groupCallParticipants = new Set();
@@ -69,11 +70,12 @@ io.on("connection", (socket) => {
       io.to(targetSocketId).emit("privateMessage", { sender, message });
       socket.emit("privateMessage", { sender, message });
 
-      // Save the private chat history
-      if (!privateChats.has(targetSocketId)) {
-        privateChats.set(targetSocketId, []);
+      // Save the private chat history for this user pair
+      const chatKey = [sender, targetUsername].sort().join('-');
+      if (!privateChats.has(chatKey)) {
+        privateChats.set(chatKey, []);
       }
-      privateChats.get(targetSocketId).push({ sender, message });
+      privateChats.get(chatKey).push({ sender, message });
     } else {
       socket.emit("errorMessage", { error: "User not found" });
     }
@@ -85,7 +87,7 @@ io.on("connection", (socket) => {
     io.emit("userList", Array.from(activeUsers.values()));
   });
 
-  // WebRTC signaling for video calls
+  // WebRTC signaling for video calls (one-to-one calls)
   socket.on("callUser", ({ targetSocketId, offer }) => {
     io.to(targetSocketId).emit("callUser", { from: socket.id, offer });
   });
@@ -98,13 +100,28 @@ io.on("connection", (socket) => {
     io.to(to).emit("iceCandidate", { from: socket.id, candidate });
   });
 
+  // Handle group calls (select participants)
+  socket.on("startGroupCall", (participants) => {
+    groupCalls.set(socket.id, participants);
+    participants.forEach((participant) => {
+      const participantSocketId = [...activeUsers.entries()].find(
+        ([, username]) => username === participant
+      )?.[0];
+      if (participantSocketId) {
+        io.to(participantSocketId).emit("groupCallInvite", {
+          from: socket.id,
+          participants,
+        });
+      }
+    });
+  });
+
   // Handle user disconnect
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
     activeUsers.delete(socket.id);
     groupCallParticipants.delete(socket.id);
     io.emit("userList", Array.from(activeUsers.values()));
-    io.emit("groupCallParticipants", Array.from(groupCallParticipants));
   });
 });
 

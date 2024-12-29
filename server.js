@@ -9,31 +9,28 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: "*", // allow all origins (this should be restricted in production)
     methods: ["GET", "POST"],
   },
 });
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static("public"));
+app.use(express.static("public")); // Serve static files if needed (adjust as per your needs)
 
 // MongoDB connection setup
 mongoose.connect("mongodb+srv://kraj:Champion1685@cluster0.o7g0j.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0", {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
-.then(() => console.log('MongoDB connected'))
-.catch(err => console.log('Error connecting to MongoDB:', err));
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.log('Error connecting to MongoDB:', err));
 
 // Mongoose Models
-
-// User Schema
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true },
   socketId: { type: String, required: true },
 });
-
 const User = mongoose.model('User', userSchema);
 
 // Message Schema
@@ -43,13 +40,10 @@ const messageSchema = new mongoose.Schema({
   message: { type: String, required: true },
   timestamp: { type: Date, default: Date.now },
 });
-
 const Message = mongoose.model('Message', messageSchema);
 
 // Active users array
 let activeUsers = [];
-
-// WebRTC peer connections
 let peerConnections = {};
 
 // Socket.io setup
@@ -69,7 +63,7 @@ io.on('connection', (socket) => {
   activeUsers.push({ username, socketId: socket.id });
 
   // Broadcast "User joined" message to all
-  io.emit('receiveMessage', { message: `${username} has joined the chat.`, from: 'system', isPrivate: false });
+  io.emit('receiveMessage', { message: `${username} has joined the chat.`, isPrivate: false });
   io.emit('updateActiveUsers', activeUsers.map((user) => user.username));
 
   // Handle sending messages
@@ -87,10 +81,10 @@ io.on('connection', (socket) => {
 
     if (isPrivate) {
       // Send private message to the target user
-      io.to(targetId).emit('receiveMessage', { message, from: socket.username, isPrivate: true });
+      io.to(targetId).emit('receiveMessage', data);
     } else {
       // Send group message to everyone
-      io.emit('receiveMessage', { message, from: socket.username, isPrivate: false });
+      io.emit('receiveMessage', data);
     }
   });
 
@@ -124,7 +118,12 @@ io.on('connection', (socket) => {
 
     // Broadcast "User left" message
     if (socket.username) {
-      io.emit('receiveMessage', { message: `${socket.username} has left the chat.`, from: 'system', isPrivate: false });
+      io.emit('receiveMessage', { message: `${socket.username} has left the chat.`, isPrivate: false });
+    }
+
+    // Clean up peer connections on disconnect
+    if (peerConnections[socket.id]) {
+      delete peerConnections[socket.id];
     }
   });
 });
@@ -137,3 +136,4 @@ app.get('/', (req, res) => {
 // Start server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+

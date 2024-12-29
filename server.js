@@ -5,7 +5,6 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
 const cors = require("cors");
 
-// MongoDB connection
 mongoose
   .connect("mongodb+srv://kraj:Champion1685@cluster0.o7g0j.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0", {
     useNewUrlParser: true,
@@ -14,7 +13,7 @@ mongoose
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
-// User Schema
+// User schema
 const userSchema = new mongoose.Schema({
   username: { type: String, unique: true, required: true },
   password: { type: String, required: true },
@@ -36,29 +35,18 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-// Active users and chat history
-const activeUsers = new Map();
+const activeUsers = new Map(); // Track active users
 const privateChats = new Map(); // Store private chat history
-const groupCalls = new Map(); // Manage group calls
-
-// WebRTC signaling for video calls
-const groupCallParticipants = new Set();
 
 // Socket.IO setup
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
 
-  // Set anonymous user initially
+  // Set anonymous username
   activeUsers.set(socket.id, `Guest-${socket.id.slice(0, 5)}`);
   io.emit("userList", Array.from(activeUsers.values()));
 
-  // Group chat message handling
-  socket.on("chatMessage", (data) => {
-    const sender = activeUsers.get(socket.id) || "Anonymous";
-    io.emit("chatMessage", { sender, message: data.message });
-  });
-
-  // Private messaging
+  // Handle private message
   socket.on("privateMessage", (data) => {
     const { targetUsername, message } = data;
     const sender = activeUsers.get(socket.id);
@@ -81,34 +69,29 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Set username after registration
-  socket.on("setUsername", (username) => {
-    activeUsers.set(socket.id, username);
-    io.emit("userList", Array.from(activeUsers.values()));
+  // Private call request (One-to-one)
+  socket.on("callUser", ({ targetSocketId }) => {
+    const from = activeUsers.get(socket.id);
+    io.to(targetSocketId).emit("privateCallRequest", { from, targetSocketId });
   });
 
-  // WebRTC signaling for video calls (one-to-one calls)
-  socket.on("callUser", ({ targetSocketId, offer }) => {
-    io.to(targetSocketId).emit("callUser", { from: socket.id, offer });
+  // Answer call (Accept or decline private call)
+  socket.on("answerCall", ({ targetSocketId, answer }) => {
+    if (answer === "accept") {
+      io.to(targetSocketId).emit("callAccepted", { from: socket.id });
+    } else {
+      io.to(targetSocketId).emit("callDeclined", { from: socket.id });
+    }
   });
 
-  socket.on("answerCall", ({ to, answer }) => {
-    io.to(to).emit("callAnswered", { from: socket.id, answer });
-  });
-
-  socket.on("iceCandidate", ({ to, candidate }) => {
-    io.to(to).emit("iceCandidate", { from: socket.id, candidate });
-  });
-
-  // Handle group calls (select participants)
+  // Group call request (Multiple users)
   socket.on("startGroupCall", (participants) => {
-    groupCalls.set(socket.id, participants);
     participants.forEach((participant) => {
       const participantSocketId = [...activeUsers.entries()].find(
         ([, username]) => username === participant
       )?.[0];
       if (participantSocketId) {
-        io.to(participantSocketId).emit("groupCallInvite", {
+        io.to(participantSocketId).emit("groupCallRequest", {
           from: socket.id,
           participants,
         });
@@ -120,12 +103,11 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
     activeUsers.delete(socket.id);
-    groupCallParticipants.delete(socket.id);
     io.emit("userList", Array.from(activeUsers.values()));
   });
 });
 
-// User Authentication Routes
+// User registration and login routes
 app.post("/register", async (req, res) => {
   const { username, password } = req.body;
   if (!username || !password)

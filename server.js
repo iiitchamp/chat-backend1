@@ -1,26 +1,8 @@
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
-const mongoose = require('mongoose');
-const bcrypt = require('bcrypt');
 const cors = require('cors');
-
-// MongoDB connection
-mongoose
-  .connect('mongodb+srv://kraj:Champion1685@cluster0.o7g0j.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0', {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
-  .then(() => console.log('MongoDB connected'))
-  .catch((err) => console.error('MongoDB connection error:', err));
-
-// User Schema
-const userSchema = new mongoose.Schema({
-  username: { type: String, unique: true, required: true },
-  password: { type: String, required: true },
-});
-
-const User = mongoose.model('User', userSchema);
+const mongoose = require('mongoose');
 
 // Express setup
 const app = express();
@@ -36,31 +18,76 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-// Active users and WebRTC signaling
+// MongoDB connection setup
+mongoose.connect("mongodb+srv://kraj:Champion1685@cluster0.o7g0j.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0", {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log('MongoDB connected'))
+.catch(err => console.log('Error connecting to MongoDB:', err));
+
+// Mongoose Models
+
+// User Schema
+const userSchema = new mongoose.Schema({
+  username: { type: String, required: true },
+  socketId: { type: String, required: true },
+});
+
+const User = mongoose.model('User', userSchema);
+
+// Message Schema
+const messageSchema = new mongoose.Schema({
+  from: { type: String, required: true },
+  to: { type: String, required: true }, // 'group' or specific username
+  message: { type: String, required: true },
+  timestamp: { type: Date, default: Date.now },
+});
+
+const Message = mongoose.model('Message', messageSchema);
+
+// Active users array
 let activeUsers = [];
+
+// WebRTC peer connections
 let peerConnections = {};
 
 // Socket.io setup
 io.on('connection', (socket) => {
   console.log('a user connected:', socket.id);
 
-  // Register user with username
-  socket.on('setUsername', (username) => {
-    socket.username = username;
-    activeUsers.push({ username, socketId: socket.id });
+  // Assign a unique anonymous username to the user
+  const username = `User${Math.floor(Math.random() * 10000)}`;
+  socket.username = username;
 
-    // Broadcast user joined message in group chat
-    io.emit('receiveMessage', { message: `${username} has joined the chat.`, isPrivate: false });
+  // Create a new user in the database or update if exists
+  const newUser = new User({ username, socketId: socket.id });
+  newUser.save()
+    .then(() => console.log(`User ${username} saved to database`))
+    .catch(err => console.log(`Error saving user: ${err}`));
 
-    // Emit the updated active users list to all clients
-    io.emit('updateActiveUsers', activeUsers.map((user) => user.username));
-  });
+  activeUsers.push({ username, socketId: socket.id });
 
-  // Private chat message handling
-  socket.on('sendMessage', (data) => {
-    if (data.isPrivate) {
-      // Send private message to target user
-      io.to(data.targetId).emit('receiveMessage', data);
+  // Broadcast "User joined" message to all
+  io.emit('receiveMessage', { message: `${username} has joined the chat.`, isPrivate: false });
+  io.emit('updateActiveUsers', activeUsers.map((user) => user.username));
+
+  // Handle sending messages
+  socket.on('sendMessage', async (data) => {
+    const { message, isPrivate, targetId } = data;
+
+    // Save message to the database
+    const newMessage = new Message({
+      from: socket.username,
+      to: isPrivate ? targetId : 'group',
+      message: message,
+    });
+
+    await newMessage.save();
+
+    if (isPrivate) {
+      // Send private message to the target user
+      io.to(targetId).emit('receiveMessage', data);
     } else {
       // Send group message to everyone
       io.emit('receiveMessage', data);
@@ -86,46 +113,20 @@ io.on('connection', (socket) => {
   });
 
   // Handle user disconnection
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log('user disconnected:', socket.id);
+
+    // Remove user from the activeUsers array and database
     activeUsers = activeUsers.filter((user) => user.socketId !== socket.id);
+    await User.deleteOne({ socketId: socket.id });
+
     io.emit('updateActiveUsers', activeUsers.map((user) => user.username));
 
-    // Broadcast user left message in group chat
+    // Broadcast "User left" message
     if (socket.username) {
       io.emit('receiveMessage', { message: `${socket.username} has left the chat.`, isPrivate: false });
     }
   });
-});
-
-// User Authentication Routes
-app.post('/register', async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password)
-    return res.status(400).send('Username and password are required');
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-  try {
-    const newUser = new User({ username, password: hashedPassword });
-    await newUser.save();
-    res.status(201).send('User registered successfully');
-  } catch (err) {
-    res.status(400).send('Username already exists');
-  }
-});
-
-app.post('/login', async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password)
-    return res.status(400).send('Username and password are required');
-
-  const user = await User.findOne({ username });
-  if (!user) return res.status(404).send('User not found');
-
-  const isPasswordValid = await bcrypt.compare(password, user.password);
-  if (!isPasswordValid) return res.status(401).send('Invalid password');
-
-  res.status(200).send('Login successful');
 });
 
 // Default route

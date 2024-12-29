@@ -66,6 +66,7 @@ io.on('connection', (socket) => {
     .then(() => console.log(`User ${username} saved to database`))
     .catch(err => console.log(`Error saving user: ${err}`));
 
+  // Add to active users
   activeUsers.push({ username, socketId: socket.id });
 
   // Broadcast "User joined" message to all

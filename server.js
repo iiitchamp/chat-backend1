@@ -52,6 +52,12 @@ io.on("connection", (socket) => {
     io.emit("userList", Array.from(activeUsers.values()));  // Emit updated list of active users
   });
 
+  // Handle group chat message
+  socket.on("groupMessage", (message) => {
+    const sender = activeUsers.get(socket.id);
+    io.emit("groupMessage", { sender, message });
+  });
+
   // Handle private message
   socket.on("privateMessage", (data) => {
     const { targetUsername, message } = data;

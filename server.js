@@ -41,10 +41,16 @@ const privateChats = new Map(); // Store private chat history
 // Socket.IO setup
 io.on("connection", (socket) => {
   console.log("A user connected:", socket.id);
-
-  // Set anonymous username
+  
+  // Default guest username for new connections
   activeUsers.set(socket.id, `Guest-${socket.id.slice(0, 5)}`);
   io.emit("userList", Array.from(activeUsers.values()));
+
+  // Set username after registration
+  socket.on("setUsername", (username) => {
+    activeUsers.set(socket.id, username);
+    io.emit("userList", Array.from(activeUsers.values()));  // Emit updated list of active users
+  });
 
   // Handle private message
   socket.on("privateMessage", (data) => {
@@ -58,7 +64,7 @@ io.on("connection", (socket) => {
       io.to(targetSocketId).emit("privateMessage", { sender, message });
       socket.emit("privateMessage", { sender, message });
 
-      // Save the private chat history for this user pair
+      // Save private chat history
       const chatKey = [sender, targetUsername].sort().join('-');
       if (!privateChats.has(chatKey)) {
         privateChats.set(chatKey, []);
@@ -69,13 +75,19 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Private call request (One-to-one)
+  // Handle user disconnect
+  socket.on("disconnect", () => {
+    console.log("User disconnected:", socket.id);
+    activeUsers.delete(socket.id);
+    io.emit("userList", Array.from(activeUsers.values()));  // Emit updated list after disconnection
+  });
+
+  // Handle calls
   socket.on("callUser", ({ targetSocketId }) => {
     const from = activeUsers.get(socket.id);
     io.to(targetSocketId).emit("privateCallRequest", { from, targetSocketId });
   });
 
-  // Answer call (Accept or decline private call)
   socket.on("answerCall", ({ targetSocketId, answer }) => {
     if (answer === "accept") {
       io.to(targetSocketId).emit("callAccepted", { from: socket.id });
@@ -97,13 +109,6 @@ io.on("connection", (socket) => {
         });
       }
     });
-  });
-
-  // Handle user disconnect
-  socket.on("disconnect", () => {
-    console.log("User disconnected:", socket.id);
-    activeUsers.delete(socket.id);
-    io.emit("userList", Array.from(activeUsers.values()));
   });
 });
 
